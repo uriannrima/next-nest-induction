@@ -126,8 +126,6 @@ Here's a small component/page definition:
 `products/index.tsx`
 
 ```tsx
-
-
 function Products() {
   return <h1>Products</h1>;
 }
@@ -437,13 +435,13 @@ But again, that is a lot of boilerplate, and our application behaves as an Singl
 
 So let's get rid of the boilerplate first.
 
-## Removing Boilerplate" or "Using React-Query"
+## Using `react-query` (or removing boilerplate):
 
 First, lets add [react-query](https://react-query-v3.tanstack.com/) to our frontend project:
 
 `yarn add react-query`
 
-`react-query` have strategies to fetch, cache, update, mutate, etc any information that we see necessary to fetch from the `backend`, it will help us out to manage inbetween states (loading, error, etc), share results between components to avoid refetching.
+`react-query` have strategies to fetch, cache, update, mutate, etc, any information that we see necessary to get from the `backend`, it will help us out to manage in between states (loading, error, etc), share results between components to avoid refetching, just to name a few of its tools.
 
 After we've installed it, let us change our `Products` component to use it:
 
@@ -546,7 +544,7 @@ async function getProducts() {
 
 Thats great, but we're still working as a simple SPA, where our information arrives in the `frontend` only after the first render, we can do it better, and fetch the information while Nextjs is rendering it, avoiding the fetch in the client side. So let's do it.
 
-## Using SSR + getServerSideProps
+## Using SSR with getServerSideProps
 
 Add the following function to your `Product` component:
 
@@ -863,8 +861,270 @@ export default function PreviewProduct({ product }: { product: Product }) {
 }
 ```
 
-# Exercise:
+# Exercise #1:
 
 As a small exercise, I would recommend to create the `EditProduct` page. Or if you just want to know how to do it, find the implementation inside `frontend/src/pages/products/[id]/edit.tsx`.
 
-7. GraphQL Example
+# Adding GraphQL
+
+## Backend
+
+Nestjs already comes with tools for us to define a GraphQL endpoint, with two strategies: `code first` (if you already have code and classes for your project) or `schema first` (if you already have an graphql schema ready). We're going to use the `code first`, since we already have all the code to make our REST API work.
+
+Lets first add our dependencies:
+
+`yarn add @nestjs/graphql @nestjs/apollo graphql apollo-server-express`
+
+And add the GraphQL moduel to the application:
+
+```diff
++import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
+import { Module } from '@nestjs/common';
++import { GraphQLModule } from '@nestjs/graphql';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { ProductsModule } from './modules/products/products.module';
+
+@Module({
+  imports: [
+    ProductsModule,
++    GraphQLModule.forRoot<ApolloDriverConfig>({
++      driver: ApolloDriver,
++      autoSchemaFile: true,
++      playground: true,
++    }),
+  ],
+  controllers: [AppController],
+  providers: [AppService],
+})
+export class AppModule {}
+```
+
+The `autoSchemaFile: true` tells Nestjs to generate our `schema.gql` in memory, you could pass a folder for it to be generated and be used for other solutions (like having typings for your `queries` in `frontend`, which is a really nice to have), this property is required, otherwise our server dont know our typings.
+
+We've added the `playground: true` so that we can play with our queries at `http://localhost:3001/graphql/playground`, this one is _optional_.
+
+So, lets define a GraphQL module, and return some data:
+
+`backend/src/modules/products/product.graphql.ts`:
+
+```ts
+import { Field, Int, ObjectType, Resolver, Query, Args } from "@nestjs/graphql";
+
+import { Product as IProduct, ProductsService } from "./products.service";
+
+@ObjectType()
+export class Product implements IProduct {
+  @Field(() => Int)
+  id: number;
+
+  @Field(() => String)
+  name: string;
+
+  @Field(() => Int)
+  price: number;
+}
+
+@Resolver(() => Product)
+export class ProductsResolver {
+  constructor(private productsService: ProductsService) {}
+
+  @Query(() => [Product])
+  async products() {
+    return this.productsService.getProducts();
+  }
+
+  @Query(() => Product)
+  async product(@Args("id", { type: () => Int }) id: number) {
+    return this.productsService.geyById(id);
+  }
+}
+```
+
+First, we define a `@ObjectType` using its decorator, it is used to tell Nestjs to generate a `Product` type for GraphQL.
+
+The `@Field` decorator tells how to validate each field.
+
+The `@Resolver` tells that this class is used to resolve the `Product` type, so any query that needs a `Product` may go through here.
+
+We define two `@Query`: `product` and `products`, the first one, returns a single product, the second, all of them. Since our `product` query needs to the ID of the product, we say that it accepts an argument with `@Args`.
+
+And since we already have a service to do all of the products list management (`ProductService`), we inject it in the controller, and use the same methods that we used for the REST solution here (`getProducts` and `getById`).
+
+We add this new module, to our ProductModule:
+
+```diff
+import { Module } from '@nestjs/common';
++import { ProductsResolver } from './product.graphql';
+import { ProductsController } from './products.controller';
+import { ProductsService } from './products.service';
+
+@Module({
+  imports: [],
+  controllers: [ProductsController],
++  providers: [ProductsService, ProductsResolver],
+})
+export class ProductsModule {}
+```
+
+And by navigating to `http://localhost:3001/graphql/playground`, we should see the playground, and be able to do this query:
+
+```graphql
+query {
+  products {
+    name
+  }
+  product(id: 1) {
+    name
+    price
+  }
+}
+```
+
+And see the list of products with just theirs name, and a single product with its entire information.
+
+## Frontend
+
+Now, we may consume our GraphQL endpoint to get the products information, so lets create a clone of our `preview` page to use a query to get its information.
+
+> There are a lot of ways of doing this type of query in the `frontend`, and strategies to allow pages/components to use only the information that it needs, like just some properties of a big type. An way of doing it is using Query `Fragments`, which allows each component to define what part of a type it wants, etc. You may want to read about it [here](https://www.apollographql.com/docs/react/data/fragments/), and research about, like [here](https://levelup.gitconnected.com/a-better-way-to-use-graphql-fragments-in-react-4f54bf862062). But we're leaving it out of the explanation for simplicity.
+
+There are two ways of handling fetching the information, like we did before with the REST endpoints:
+
+1. **Client Side**: Use a query in your component, almost like the same way that we did on our `useQuery` from `react-query`.
+2. **Server Side**: Use the client on a `getServerSideProps`, and pass the required information to the component through the `props` return.
+
+> Both solutions are valid, and you may check which one is best for your use case. You may even find a way to share the information fetched in the `server side` with the `client side` by serializing its cache. We're going to stick to the first one (since it's the most common case), but leave an example of the second one too in the preview component.
+
+First, add our new dependencies:
+
+`yarn add @apollo/client graphql`
+
+Create a file to export our graphql client:
+
+`frontend/src/graphql.ts`
+
+```ts
+import { ApolloClient, InMemoryCache } from "@apollo/client";
+
+const client = new ApolloClient({
+  uri: "http://localhost:3001/graphql",
+  cache: new InMemoryCache(),
+});
+
+export default client;
+```
+
+Create a clone of our `preview` page that uses `@apollo/client` hook: `useQuery`.
+
+`frontend/src/pages/products/[id]/gql.tsx`
+
+```tsx
+import Link from "next/link";
+
+import { gql, useQuery } from "@apollo/client";
+
+import { Product } from "..";
+import { useRouter } from "next/router";
+
+// Define our query, $productId tells that it requires an argument.
+const GET_PRODUCT = gql(`
+query GetProduct($productId: Int!) {
+  product(id: $productId) {
+    name,
+    price
+  }
+}
+`);
+
+// Our query could return not only product, so we need to specify each property
+// that it returns
+type GetProductQuery = {
+  product: Product;
+};
+
+export default function PreviewProduct() {
+  // Recover the product ID from the URL.
+  const {
+    query: { id: productId },
+  } = useRouter();
+
+  // Almost like react-query, we also use a useQuery hook to get the information
+  // And it gives us the data, and some in between states, like loading.
+  const { data, loading } = useQuery<GetProductQuery>(GET_PRODUCT, {
+    // Pass the product ID argument
+    variables: {
+      productId: Number(productId),
+    },
+    // Don't run the query if we don't have the product id yet
+    skip: !productId,
+  });
+
+  return (
+    <>
+      <h1>Preview:</h1>
+      <Link href="/products">Products</Link> <Link
+        href={`/products/${data?.product?.id}/edit`}
+      >
+        Edit
+      </Link>
+      <hr />
+      {/* Since we're fetching client side, back is our loading again... */}
+      {loading && <span>Loading...</span>}
+      <div>
+        <span>{data?.product?.name}</span>
+      </div>
+      <div>
+        <span>{data?.product?.price}</span>
+      </div>
+    </>
+  );
+}
+```
+
+It almost looks like the same as `preview` before the `getServerSideProps`. But since we don't have a way (for now) to know the GraphlQL typings, we have to give some help to Typescript, so we create a `GetProductQuery` type to help us out on the query result.
+
+> We're a _bit of a liar_, since we're telling that our query returns the entire `Product`, but we only have the name and price properties, someone could come later try to use the ID property and receive an error. You can use `graphql-codegen` to generate Typescript types for your queries, and have a better developer experience and avoid future errors. You can find more [here](https://the-guild.dev/graphql/codegen/docs/getting-started).
+
+If we access the `http://localhost:3000/products/1/gql` URL, we receive an error, because we didn't provide a `client` to our `useQuery`, lets solve that:
+
+```diff
+import type { AppProps } from "next/app";
+
+import { QueryClient, QueryClientProvider } from "react-query";
++import { ApolloProvider } from "@apollo/client";
+
++import ApolloClient from "../graphql";
+
+import "@/styles/globals.css";
+
+const client = new QueryClient();
+
+export default function App({ Component, pageProps }: AppProps) {
+  return (
++    <ApolloProvider client={ApolloClient}>
+      <QueryClientProvider client={client}>
+        <Component {...pageProps} />
+      </QueryClientProvider>
++    </ApolloProvider>
+  );
+}
+```
+
+With that, you should be able to see the product name and price (and maybe a quick `loading` message).
+
+# Exercise #2:
+
+Create a clone of `create` page to use a grqphql `mutation` instead of a `POST` method.
+
+> Tip: You're going to use `useMutation` from `@apollo/client`.
+
+# That's All Folks
+
+So, I hope that after this _small_ tutorial/induction, you may have a good grasp of how to create your `backend` and `frontend` with nextjs/nestjs and how to integrate those two.
+
+There is a lot else to learn, decisions to make, and many different ways of solving/connecting things, but this is a small example of how to do it.
+
+Hope you like it.
+
+Thanks.
