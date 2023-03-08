@@ -1,9 +1,12 @@
+import { GetServerSideProps } from "next";
 import Link from "next/link";
+import { useRouter } from "next/router";
 
 import { gql, useQuery } from "@apollo/client";
 
+import client from "@/graphql";
+
 import { Product } from "..";
-import { useRouter } from "next/router";
 
 // Define our query, $productId tells that it requires an argument.
 const GET_PRODUCT = gql(`
@@ -19,6 +22,25 @@ query GetProduct($productId: Int!) {
 // that it returns
 type GetProductQuery = {
   product: Product;
+};
+
+// We could export this function to be used as a fetching data on SSR of the component, and pass the product as a prop to the page.
+// We would avoid the loading state, and the fetching on client side. Defined here as an example.
+const getServerSideProps: GetServerSideProps = async ({
+  query: { id: productId },
+}) => {
+  const { data } = await client.query<GetProductQuery>({
+    query: GET_PRODUCT,
+    variables: {
+      productId,
+    },
+  });
+
+  return {
+    props: {
+      product: data.product,
+    },
+  };
 };
 
 export default function PreviewProduct() {
