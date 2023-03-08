@@ -19,7 +19,6 @@ Some of these steps will be optional, others are required.
     - nvm install <version>: To install the node version that you want.
   - On Linux/WSL you may define a default version that will be used whenever you enter your environment.
 - Node.js **(required)**:
-  - We're going to use **version 16** because of the node-box boilerplate, but the newer the better for your projects.
   - Javascript Runtime, required to run our web development tools, to build, transpile, run, etc.
   - Installation:
     - If you have NVM:
@@ -69,15 +68,13 @@ Our project will have two main folders, `frontend` and `backend`.
 
 Our `frontend` will be an [Nextjs Application](https://nextjs.org/) a React Framework with a lot of built-in tools, and our `backend` will be an [Nestjs Application](https://docs.nestjs.com/), a framework for building server-side applications, or simple web apis, which has some definitions as-in .NET Framework applications (controllers, services, models, dependency injection, etc).
 
-Nextjs comes with a backend-for-frontend solution which allows us to write some close to the frontend functions that may be used to consume other apis, which in our case, will be the Nestjs application.
-
-## Add Nextjs Section
+Nextjs comes with a lot of "Just Ready" solutions (SSR, SSG, BFF, Auth, plugins, etc) to help us try to follow best practices for frontend while Nestjs gives us an abstraction over `express` (or `nestify`, if you want more performance) to create scalable web applications.
 
 # Objective
 
 Create an application that can consume an endpoint with list of products and render them as a simple table, which may do CRUD operations on each product.
 
-# Project Creation
+# Project Development
 
 ## Frontend
 
@@ -129,7 +126,7 @@ Here's a small component/page definition:
 `products/index.tsx`
 
 ```tsx
-import React from "react";
+
 
 function Products() {
   return <h1>Products</h1>;
@@ -183,7 +180,7 @@ Lets now add some information to our page:
 
 ```typescript
 type Product = {
-  id: string;
+  id: number;
   name: string;
   value: number;
 };
@@ -292,7 +289,7 @@ We created a ProductsModule without any services or controllers, but we'll chang
 import { Injectable } from "@nestjs/common";
 
 type Product = {
-  id: string;
+  id: number;
   name: string;
   price: number;
 };
@@ -440,11 +437,434 @@ But again, that is a lot of boilerplate, and our application behaves as an Singl
 
 So let's get rid of the boilerplate first.
 
-# TODO: 
-1. Add react-query
-2. Add getServerSideProps
-3. Consume a BFF API
-4. Finish adding the crud operations on backend
-5. Add the create and preview page
-6. Finish the project
+## Removing Boilerplate" or "Using React-Query"
+
+First, lets add [react-query](https://react-query-v3.tanstack.com/) to our frontend project:
+
+`yarn add react-query`
+
+`react-query` have strategies to fetch, cache, update, mutate, etc any information that we see necessary to fetch from the `backend`, it will help us out to manage inbetween states (loading, error, etc), share results between components to avoid refetching.
+
+After we've installed it, let us change our `Products` component to use it:
+
+```diff
++async function getProducts() {
++  const response = await fetch("http://localhost:3001/products");
++  const _products: Product[] = await response.json();
++  return _products;
++}
+
+function Products() {
+-  const [products, setProducts] = useState<Product[]>([]);
+-
+-  useEffect(() => {
+-    async function getProducts() {
+-      const response = await fetch("http://localhost:3001/products");
+-      const _products: Product[] = await response.json();
+-      return _products;
+-    }
+-
+-    getProducts().then((products) => {
+-      setProducts(products);
+-    });
+-  }, []);
+
++  const {
++    data: products,
++    isLoading,
++    isError,
++  } = useQuery(["get-products"], getProducts);
+```
+
+We've moved the `fetch`ing function outside of the component, this way we may reuse somewhere else if needed, added a `useQuery` hook, that we give an identifier (`get-products`) and a `fetch` function. The hook will handle requesting the information, and gives us some informations:
+
+- useQuery:
+  - `data`: Will be information fetched from the backend using the `getProducts`.
+  - `isLoading/isError`: Tells us the current state of the fetching.
+
+We rename the `data` as `products`, and our code is almost perfect, but now Typescript complains about a possibility of a undefined value. Thats because while the information isn't available, the `data` is `undefined`. So we have to consider it while coding our template:
+
+```diff
+<>
+      <h1>Products</h1>
+-      {products.map((product) => (
++      {products?.map((product) => (
+        <div key={product.id}>
+          {/* Everytime that you need to generate multiple elements side by side in a iteration, keys are STRONGLY recommended */}
+          <span>
+            {product.name} - {product.price}
+          </span>
+        </div>
+      ))}
+    </>
+```
+
+Since `React` ignores anything that is a null or undefined, if our product is undefined, we render nothign. But we may have an issue yet:
+
+`Error: No QueryClient set, use QueryClientProvider to set one`
+
+Our ReactQuery doesn't have a client to use, and we solve it by providing it as "up" as possible in our application, in this cade, in our \_app.tsx:
+
+```diff
+import "@/styles/globals.css";
+import type { AppProps } from "next/app";
++import { QueryClient, QueryClientProvider } from "react-query";
+
++const client = new QueryClient();
+
+export default function App({ Component, pageProps }: AppProps) {
+  return (
++    <QueryClientProvider client={client}>
+      <Component {...pageProps} />
++    </QueryClientProvider>
+  );
+}
+```
+
+And with that, we should see the products again, but now without much of the boilerplate and with other tools at our disposal. We may not even show an loading message while we dont have the information. Lets also add a fake wait in our function so we can even see it:
+
+```diff
++ async function wait(ms = 0) {
++   return new Promise<void>((res) => {
++     setTimeout(() => {
++       res();
++     }, ms);
++   });
++ }
+
+...
+
+async function getProducts() {
++  await wait(3000);
+
+...
+
+<h1>Products</h1>
++{isLoading && <span>Loading products...</span>}
+{products?.map((product) => (
+```
+
+Thats great, but we're still working as a simple SPA, where our information arrives in the `frontend` only after the first render, we can do it better, and fetch the information while Nextjs is rendering it, avoiding the fetch in the client side. So let's do it.
+
+## Using SSR + getServerSideProps
+
+Add the following function to your `Product` component:
+
+```tsx
+import { GetServerSideProps } from "next";
+
+...
+
+export const getServerSideProps: GetServerSideProps = async () => {
+  return {
+    props: {},
+  };
+};
+```
+
+This function tells Nextjs to make available any information given in "props" as a property while rendering the component (in this case `Products`) on the server side. And sync it is an async function, we can just use the fetch function that we had previously defined:
+
+```tsx
+export const getServerSideProps: GetServerSideProps = async () => {
+  const products = await getProducts();
+
+  return {
+    props: {
+      products,
+    },
+  };
+};
+```
+
+Lets also change our `Product` to accept it's products through the prop:
+
+```diff
++function Products({ products }: { products: Product[] }) {
+-  const {
+-    data: products,
+-    isLoading,
+-    isError,
+-  } = useQuery(["get-products"], getProducts);
+
+...
+-      {isLoading && <span>Loading products...</span>}
+```
+
+Since the loading occurs in the server side, we don't need the loading for now. After that, you should see the products list, without any `fetch` in the `Network` tab, and by looking at the HTML returned by Next (`http://localhost:3000/products`) you should see that the HTML already comes from the server with products on it. The server has `SSR` our page with the information already being fetched in the server side.
+
+> Beware that, we would need to make some modifications for this usage be really "production-ready" by making the fetched information available for the entire application and avoid refetching (or multiple getServerSideProps), but it's beyond the scope now, if you want to know more about of how to do it, you can check it [here](https://tanstack.com/query/v4/docs/react/guides/ssr).
+
+## Adding new operations in the backend
+
+Below, I'm going to leave a quick reference of adding new HTTP methods in our `products` module:
+
+`backend/src/modules/products/products.service.ts`
+
+```ts
+import { Injectable, NotFoundException } from "@nestjs/common";
+
+export type Product = {
+  id: number;
+  name: string;
+  price: number;
+};
+
+@Injectable()
+export class ProductsService {
+  private products: Product[] = [];
+
+  constructor() {
+    this.products.push(
+      { id: 1, name: "Shoes", price: 11 },
+      { id: 2, name: "Dress", price: 12 },
+      { id: 3, name: "Shirt", price: 13 }
+    );
+  }
+
+  getProducts(): Product[] {
+    return this.products;
+  }
+
+  addProduct(product: Product) {
+    const newProduct = { ...product, id: this.products.length + 1 };
+    this.products.push(newProduct);
+    return newProduct;
+  }
+
+  private findById(id: number) {
+    const found = this.products.find((p) => p.id == id);
+
+    if (!found) {
+      throw new NotFoundException();
+    }
+
+    return found;
+  }
+
+  updateProduct(id: number, { id: ignore, ...updatedProduct }: Product) {
+    const foundProduct = this.findById(id);
+    return Object.assign(foundProduct, updatedProduct);
+  }
+
+  geyById(id: number) {
+    return this.findById(id);
+  }
+}
+```
+
+`backend/src/modules/products/products.controller.ts`
+
+```ts
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Put,
+} from "@nestjs/common";
+import { Product, ProductsService } from "./products.service";
+
+@Controller("products")
+export class ProductsController {
+  constructor(private readonly productsService: ProductsService) {}
+
+  @Get()
+  getProducts() {
+    return this.productsService.getProducts();
+  }
+
+  @Post()
+  @HttpCode(201)
+  addProduct(@Body() product: Product) {
+    return this.productsService.addProduct(product);
+  }
+
+  @Put(":id")
+  @HttpCode(204)
+  updateProduct(@Param("id") id: number, @Body() product: Product) {
+    return this.productsService.updateProduct(id, product);
+  }
+
+  @Get(":id")
+  getById(@Param("id") id: number) {
+    return this.productsService.geyById(id);
+  }
+}
+```
+
+Now, you should be able to:
+
+```bash
+curl http://localhost:3001/products # Get all
+
+[{"id":1,"name":"Shoes","price":11},{"id":2,"name":"Dress","price":12},{"id":3,"name":"Shirt","price":13}]
+
+curl http://localhost:3001/products/1 # Get by id
+
+{"id":1,"name":"Shoes","price":11}
+
+curl http://localhost:3001/products/4 # Get an 404
+
+{"statusCode":404,"message":"Not Found"}
+
+curl -X POST http://localhost:3001/products
+  -H "Content-Type: application/json"
+  -d '{ "name": "Basketball", "price": 14 }' # Create a new product
+
+{"name":"Basketball","price":14,"id":4}
+
+curl -X PUT http://localhost:3001/products/4
+  -H "Content-Type: application/json"
+  -d '{ "name": "Football", "price": 14 }' # Update a product
+```
+
+## Handling form submission and routing
+
+Now, lets add two new pages as example, one to `create` a new product, and another one to `preview` a product:
+
+## Create Page
+
+### Using `react-hook-form`:
+
+Since we don't want to add boilerplate to handle forms, we're going to use a tool called `react-hook-form` that lets us create, manage and submit forms with ease on `React`, use our `react-query` to submit the information to the `backend`, and use Nextjs `router` to redirect us to the `/products` after submiting:
+
+`frontend/src/pages/products/create.tsx`
+
+```tsx
+import { useRouter } from "next/router";
+
+import { useForm } from "react-hook-form";
+import { useMutation, useQueryClient } from "react-query";
+import { Product } from ".";
+
+// Create a intermediate type without the ID.
+type CreateProduct = Omit<Product, "id">;
+
+// Our async fetch function to post information
+async function createProduct(product: CreateProduct) {
+  return fetch("http://localhost:3001/products", {
+    method: "POST",
+    body: JSON.stringify(product),
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+}
+
+export default function Create() {
+  // We use the router to redirect the user to /products after creating it.
+  const router = useRouter();
+
+  // We ask for the react-query to invalidate the "get-products" query, and avoid stale cache.
+  const client = useQueryClient();
+
+  // useMutation instead of a useQuery, since we're POSTing to the backend
+  const { mutate, isLoading } = useMutation(createProduct, {
+    onSuccess() {
+      // This is how we invalidate a query to avoid stale cache
+      client.invalidateQueries(["get-products"]);
+
+      // Send the user to the products page
+      router.push("/products");
+    },
+  });
+
+  // Our react-hook-form
+  const { register, handleSubmit } = useForm<CreateProduct>();
+
+  // Function that will be called on succesful submit
+  const onSubmit = (values: CreateProduct) => {
+    mutate(values);
+  };
+
+  return (
+    <>
+      <h1>Create Product</h1>
+      <form onSubmit={handleSubmit(onSubmit)}>
+        <div>
+          <label>
+            Name:
+            <input
+              type="text"
+              // This is how we register an field using react-hook-form
+              {...register("name", { required: true, minLength: 3 })}
+              required
+              minLength={3}
+            />
+          </label>
+        </div>
+        <div>
+          <label>
+            Price
+            <input
+              type="number"
+              {...register("price", {
+                valueAsNumber: true,
+                required: true,
+                min: 0.1,
+              })}
+              required
+            />
+          </label>
+        </div>
+        {/* Since react-query gives us a way to handle with the post, 
+        we have a isLoading to disable the button while we submit. */}
+        <button disabled={isLoading}>Create</button>
+      </form>
+    </>
+  );
+}
+```
+
+## Preview Page
+
+### Using getServerSideProps with router/context:
+
+Just like the `Products`, we're going to fetch the required information server side, by recovering the URL ID from the context that is given to `getServerSideProps` function.
+
+```tsx
+import { GetServerSideProps } from "next";
+import Link from "next/link";
+
+import { Product } from "..";
+
+// Async function to fetch a single product information
+async function getById(id: number) {
+  const response = await fetch(`http://localhost:3001/products/${id}`);
+  const product: Product = await response.json();
+  return product;
+}
+
+// As the /products page, we're going to fetch the information server side
+export const getServerSideProps: GetServerSideProps = async ({
+  // We receive the Nextjs context here, where we can extract the URL information, like query
+  query: { id: productId },
+}) => {
+  const product = await getById(Number(productId));
+  return {
+    props: { product },
+  };
+};
+
+// And simply render it
+export default function PreviewProduct({ product }: { product: Product }) {
+  return (
+    <>
+      <h1>Preview:</h1>
+      <Link href="/products">Products</Link>
+      <hr />
+      <div>
+        <span>{product?.name}</span>
+      </div>
+    </>
+  );
+}
+```
+
+# Exercise:
+
+As a small exercise, I would recommend to create the `EditProduct` page. Or if you just want to know how to do it, find the implementation inside `frontend/src/pages/products/[id]/edit.tsx`.
+
 7. GraphQL Example
