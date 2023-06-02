@@ -27,6 +27,10 @@ Some of these steps will be optional, others are required.
     - If you dont:
       - Download your recommended version: https://nodejs.org/en/download/
       - You may find previous releases here: https://nodejs.org/en/download/releases/
+- NPM: **(required)**:
+  - Node Package Manager to install dependencies, will be used just to install yarn
+  - Installation:
+    - `npm install -g npm@8.19.3`
 - Yarn **(required)**:
   - Package manager to install our external dependencies, an NPM replacement with some improvements.
   - Uses NPM as main registry, but we'll use a private one later on.
